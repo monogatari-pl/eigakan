@@ -10,26 +10,17 @@ import os
 
 from BaseHTTPServer import BaseHTTPRequestHandler, HTTPServer
 from SocketServer import ThreadingMixIn
+import mimetypes as memetypes
+
 import threading
 import argparse
 import cgi
-import urlparse
+import json
 
-import Queue
-import commands
-from multiprocessing.pool import ThreadPool
+import shutil
 
-import signal
-
-_id = '2018'
-_output = 'c:/ffmpeg/test/htdocs/' + _id
 _output_file = 'play.m3u8'
-_input = 'c:/ffmpeg/test/1.mkv'
-cmd2 = 'ffmpeg -hide_banner -i ' + _input
-cmd2 += ' -c:v libx264 -x264opts keyint=500:no-scenecut -s 1280x720 -r 25 -b:v 3000000 -profile:v main -c:a aac'
-cmd2 += ' -sws_flags bilinear -hls_time 10 -hls_segment_type mpegts -hls_allow_cache 0 -hls_list_size 0'
-cmd2 += ' -live_start_index 0 -hls_flags +temp_file+program_date_time -hls_playlist_type event'
-cmd2 += ' -hls_start_number_source generic -start_number 0 ' + _output + '/' + _output_file
+_output_dir = 'c:/ffmpeg/test/htdocs/'
 
 
 class FFMPegRunner(object):
@@ -38,15 +29,19 @@ class FFMPegRunner(object):
     re_position = re.compile('time=(\d{2}):(\d{2}):(\d{2})\.(\d{2})\d*', re.U | re.I)
     pipe = None
 
-    def __init__(self, output):
-        self.cmd = ''
+    def __init__(self, command, output):
+        self.cmd = command
         self._stop = False
         self._output = output
-        if not os.path.exists(self._output):
-            os.makedirs(self._output)
+        basepath = os.path.dirname(self._output)
+        if not os.path.exists(basepath):
+            os.makedirs(basepath)
 
     def run_session(self, command, status_handler=None):
-        self.pipe = subprocess.Popen(command + self._output, shell=True,
+        ffmpeg_command = command + self._output
+        ffmpeg_command = str(ffmpeg_command).replace('\\','/')
+        print(ffmpeg_command)
+        self.pipe = subprocess.Popen(ffmpeg_command, shell=True,
                                      stdout=subprocess.PIPE,
                                      stderr=subprocess.STDOUT,
                                      universal_newlines=True,
@@ -90,8 +85,6 @@ class FFMPegRunner(object):
         percent = 100 * position / duration
         percent = math.floor(percent*1000)
         percent = percent / 1000
-        # percent = int(percent)
-        # print(percent)
         return 100 if percent > 100 else percent
 
     def time2sec(self, search):
@@ -100,7 +93,6 @@ class FFMPegRunner(object):
         x3 = int(search.group(1))
         x = x1 + (x2*60) + (x3*3600)
         return float(x)
-        # time.sleep(10)
 
     bar = progressbar.ProgressBar()
 
@@ -113,9 +105,9 @@ class FFMPegRunner(object):
         time.sleep(0.3)
 
     def run(self, _cmd):
-        print('run')
         self.cmd = _cmd
         self.run_session(self.cmd, status_handler=self.status_handler)
+        print('running')
 
     def shutdown(self):
         self._stop = True
@@ -129,32 +121,41 @@ class LocalData(object):
     records = {}
 
 
+local_data = LocalData
+
+
 class HTTPRequestHandler(BaseHTTPRequestHandler):
     def do_POST(self):
-        if re.search('/api/transode/*', self.path) is not None:
+        if re.search('/api/transcode/*', self.path) is not None:
             ctype, pdict = cgi.parse_header(self.headers.getheader('content-type'))
-            if ctype == 'application/json':
+            if ctype == 'application/json' or ctype == 'text/json':
                 length = int(self.headers.getheader('content-length'))
-                data = urlparse.parse_qs(self.rfile.read(length), keep_blank_values=1)
+                # data = urlparse.parse_qs(self.rfile.read(length), keep_blank_values=1)
+                json_body = self.rfile.read(length)
+                data = json.loads(json_body)
                 record_id = self.path.split('/')[-1]
                 if 'file' in data:
-                    if os.path.exists(data['file'][0]):
-                        output3 = 'c:/ffmpeg/test/htdocs/' + record_id
-                        cmd3 = 'ffmpeg -hide_banner -i ' + data['file'][0]
+                    file_place = data['file']
+                    if os.path.exists(file_place):
+                        cmd3 = 'ffmpeg -hide_banner -i ' + '"' + file_place + '"'
                         cmd3 += ' -c:v libx264 -x264opts keyint=500:no-scenecut -s 1280x720 -r 25 -b:v 3000000 -profile:v main -c:a aac'
                         cmd3 += ' -sws_flags bilinear -hls_time 10 -hls_segment_type mpegts -hls_allow_cache 0 -hls_list_size 0'
                         cmd3 += ' -live_start_index 0 -hls_flags +temp_file+program_date_time -hls_playlist_type event'
                         cmd3 += ' -hls_start_number_source generic -start_number 0 '
 
+                        output3 = _output_dir + record_id
                         output_file = os.path.join(output3, _output_file)
+
+                        if os.path.exists(output3):
+                            shutil.rmtree(output3)
+
                         worker = Worker(cmd3, output_file)
                         worker.start()
-                        # worker.join()
 
                         while not os.path.exists(output_file):
                             time.sleep(2)
 
-                        LocalData.records[record_id] = output_file
+                        local_data.records[record_id] = output_file
                         print "record %s is added successfully" % record_id
 
                         self.send_response(200)
@@ -174,9 +175,10 @@ class HTTPRequestHandler(BaseHTTPRequestHandler):
             return
 
     def do_GET(self):
-        if re.search('/api/transode/*', self.path) is not None:
+        print("get:" + str(self.path))
+        if re.search('/api/transcode/*', self.path) is not None:
             record_id = self.path.split('/')[-1]
-            if record_id in LocalData.records:
+            if record_id in local_data.records:
                 self.send_response(200)
                 self.send_header('Content-Type', 'application/json')
                 self.end_headers()
@@ -185,11 +187,38 @@ class HTTPRequestHandler(BaseHTTPRequestHandler):
                 self.send_response(400, 'Bad Request: record does not exist')
                 self.send_header('Content-Type', 'application/json')
                 self.end_headers()
+        elif re.search('/api/video/*', self.path) is not None:
+            record_id = self.path.split('/')[-2]
+            file = self.path.split('/')[-1]
+            if self.path.endswith(".m3u8") or self.path.endswith(".ts") or self.path.endswith(".vtt"):
+                file_path = os.path.join(os.path.join(_output_dir, record_id), file)
+                content, encoding = memetypes.MimeTypes().guess_type(file_path)
+                if content is None:
+                    content = "application/octet-stream"
+                f = open(file_path, 'rb')
+                self.send_response(200)
+                self.send_header('Content-type', content)
+                self.end_headers()
+                shutil.copyfileobj(f, self.wfile)
+                f.close()
         else:
             self.send_response(403)
             self.send_header('Content-Type', 'application/json')
             self.end_headers()
             return
+
+    def do_OPTIONS(self):
+        self.send_response(200, "ok")
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.send_header('Access-Control-Allow-Methods', 'GET, OPTIONS')
+        self.send_header("Access-Control-Allow-Headers", "X-Requested-With")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.end_headers()
+
+    def do_HEAD(self):
+        self.send_response(200)
+        self.send_header("content-type", "text/plain;charset=utf-8")
+        self.end_headers()
 
 
 class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
@@ -203,6 +232,7 @@ class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
 class SimpleHttpServer:
     def __init__(self, ip, port):
         self.server = ThreadedHTTPServer((ip, port), HTTPRequestHandler)
+        # self.server = HTTPServer((ip, port), HTTPRequestHandler)
         self.server_thread = None
 
     def start(self):
@@ -213,8 +243,8 @@ class SimpleHttpServer:
     def waitForThread(self):
         self.server_thread.join()
 
-    def addRecord(self, recordID, jsonEncodedRecord):
-        LocalData.records[recordID] = jsonEncodedRecord
+    # def addRecord(self, recordID, jsonEncodedRecord):
+    #    LocalData.records[recordID] = jsonEncodedRecord
 
     def stop(self):
         self.server.shutdown()
@@ -226,12 +256,10 @@ class Worker(threading.Thread):
         threading.Thread.__init__(self)
         self.server_thread = None
         self.cmd = _cmd
-        # self.queue = queue
-        self.runner = FFMPegRunner(_output)
+        self.runner = FFMPegRunner(_cmd, _output)
 
     def run(self):
         self.server_thread = threading.Thread(target=self.runner.run(self.cmd))
-        # self.queue.put((self.cmd, self.server_thread))
         self.server_thread.daemon = False
         self.server_thread.start()
 
@@ -240,13 +268,10 @@ class Worker(threading.Thread):
 
     def stop(self):
         self.runner.shutdown()
-        # self.waitForThread()
 
     def status(self):
         self.runner.status()
 
-
-# result_queue = Queue.Queue()
 
 if __name__ == "__main__":
     print('eigakan')
