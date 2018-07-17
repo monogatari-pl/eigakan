@@ -224,3 +224,4 @@ if __name__ == "__main__":
 
 # TODO support stoping transcode via GET/POST
 # TODO resolve: socket.py", line 307, in flush self._sock.sendall(view[write_offset:write_offset+buffer_size])
+# TODO add support to hardsubing with parameter of which subs to pick based on metadata from external source (nakamori -> shoko)
