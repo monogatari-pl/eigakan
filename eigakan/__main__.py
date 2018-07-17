@@ -1,6 +1,8 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
+from flask import Flask, request, send_from_directory, jsonify
+
 import subprocess
 import re
 import time
@@ -8,19 +10,14 @@ import math
 import progressbar
 import os
 
-from BaseHTTPServer import BaseHTTPRequestHandler, HTTPServer
-from SocketServer import ThreadingMixIn
-import mimetypes as memetypes
+import mimetypes
 
 import threading
 import argparse
-import cgi
-import json
 
 import shutil
 
-_output_file = 'play.m3u8'
-_output_dir = 'c:/ffmpeg/test/htdocs/'
+import urllib2
 
 
 class FFMPegRunner(object):
@@ -39,7 +36,7 @@ class FFMPegRunner(object):
 
     def run_session(self, command, status_handler=None):
         ffmpeg_command = command + self._output
-        ffmpeg_command = str(ffmpeg_command).replace('\\','/')
+        ffmpeg_command = str(ffmpeg_command).replace('\\', '/')
         print(ffmpeg_command)
         self.pipe = subprocess.Popen(ffmpeg_command, shell=True,
                                      stdout=subprocess.PIPE,
@@ -122,133 +119,8 @@ class LocalData(object):
 
 
 local_data = LocalData
-
-
-class HTTPRequestHandler(BaseHTTPRequestHandler):
-    def do_POST(self):
-        if re.search('/api/transcode/*', self.path) is not None:
-            ctype, pdict = cgi.parse_header(self.headers.getheader('content-type'))
-            if ctype == 'application/json' or ctype == 'text/json':
-                length = int(self.headers.getheader('content-length'))
-                # data = urlparse.parse_qs(self.rfile.read(length), keep_blank_values=1)
-                json_body = self.rfile.read(length)
-                data = json.loads(json_body)
-                record_id = self.path.split('/')[-1]
-                if 'file' in data:
-                    file_place = data['file']
-                    if os.path.exists(file_place):
-                        cmd3 = 'ffmpeg -hide_banner -i ' + '"' + file_place + '"'
-                        cmd3 += ' -c:v libx264 -x264opts keyint=500:no-scenecut -s 1280x720 -r 25 -b:v 3000000 -profile:v main -c:a aac'
-                        cmd3 += ' -sws_flags bilinear -hls_time 10 -hls_segment_type mpegts -hls_allow_cache 0 -hls_list_size 0'
-                        cmd3 += ' -live_start_index 0 -hls_flags +temp_file+program_date_time -hls_playlist_type event'
-                        cmd3 += ' -hls_start_number_source generic -start_number 0 '
-
-                        output3 = _output_dir + record_id
-                        output_file = os.path.join(output3, _output_file)
-
-                        if os.path.exists(output3):
-                            shutil.rmtree(output3)
-
-                        worker = Worker(cmd3, output_file)
-                        worker.start()
-
-                        while not os.path.exists(output_file):
-                            time.sleep(2)
-
-                        local_data.records[record_id] = output_file
-                        print "record %s is added successfully" % record_id
-
-                        self.send_response(200)
-                        self.end_headers()
-                    else:
-                        print "file 404"
-                else:
-                    print "no file in json"
-            else:
-                data = {}
-                self.send_response(200)
-                self.end_headers()
-        else:
-            self.send_response(403)
-            self.send_header('Content-Type', 'application/json')
-            self.end_headers()
-            return
-
-    def do_GET(self):
-        print("get:" + str(self.path))
-        if re.search('/api/transcode/*', self.path) is not None:
-            record_id = self.path.split('/')[-1]
-            if record_id in local_data.records:
-                self.send_response(200)
-                self.send_header('Content-Type', 'application/json')
-                self.end_headers()
-                self.wfile.write("{\"file\":\"" + LocalData.records[record_id] + "\"}")
-            else:
-                self.send_response(400, 'Bad Request: record does not exist')
-                self.send_header('Content-Type', 'application/json')
-                self.end_headers()
-        elif re.search('/api/video/*', self.path) is not None:
-            record_id = self.path.split('/')[-2]
-            file = self.path.split('/')[-1]
-            if self.path.endswith(".m3u8") or self.path.endswith(".ts") or self.path.endswith(".vtt"):
-                file_path = os.path.join(os.path.join(_output_dir, record_id), file)
-                content, encoding = memetypes.MimeTypes().guess_type(file_path)
-                if content is None:
-                    content = "application/octet-stream"
-                f = open(file_path, 'rb')
-                self.send_response(200)
-                self.send_header('Content-type', content)
-                self.end_headers()
-                shutil.copyfileobj(f, self.wfile)
-                f.close()
-        else:
-            self.send_response(403)
-            self.send_header('Content-Type', 'application/json')
-            self.end_headers()
-            return
-
-    def do_OPTIONS(self):
-        self.send_response(200, "ok")
-        self.send_header('Access-Control-Allow-Origin', '*')
-        self.send_header('Access-Control-Allow-Methods', 'GET, OPTIONS')
-        self.send_header("Access-Control-Allow-Headers", "X-Requested-With")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
-        self.end_headers()
-
-    def do_HEAD(self):
-        self.send_response(200)
-        self.send_header("content-type", "text/plain;charset=utf-8")
-        self.end_headers()
-
-
-class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
-    allow_reuse_address = True
-
-    def shutdown(self):
-        self.socket.close()
-        HTTPServer.shutdown(self)
-
-
-class SimpleHttpServer:
-    def __init__(self, ip, port):
-        self.server = ThreadedHTTPServer((ip, port), HTTPRequestHandler)
-        # self.server = HTTPServer((ip, port), HTTPRequestHandler)
-        self.server_thread = None
-
-    def start(self):
-        self.server_thread = threading.Thread(target=self.server.serve_forever)
-        self.server_thread.daemon = True
-        self.server_thread.start()
-
-    def waitForThread(self):
-        self.server_thread.join()
-
-    # def addRecord(self, recordID, jsonEncodedRecord):
-    #    LocalData.records[recordID] = jsonEncodedRecord
-
-    def stop(self):
-        self.server.shutdown()
-        self.waitForThread()
+app = Flask(__name__, static_url_path='')
+worker = None
 
 
 class Worker(threading.Thread):
@@ -273,17 +145,82 @@ class Worker(threading.Thread):
         self.runner.status()
 
 
+@app.route('/api/video/<path:path>')
+def do_get(path):
+    return send_from_directory(args.root_dir, path)
+
+
+@app.route('/api/transcode/<path:path>', methods=['GET', 'POST'])
+def transcode(path):
+    if request.method == 'POST':
+        data = request.get_json(silent=True)
+        record_id = path
+        process_file = False
+        if 'file' in data:
+            file_place = data['file']
+            if "http:" in file_place:
+                try:
+                    urllib2.urlopen(file_place)
+                    process_file = True
+                except urllib2.HTTPError, e:
+                    print(e.code)
+                except urllib2.URLError, e:
+                    print(e.args)
+            else:
+                if os.path.exists(file_place):
+                    process_file = True
+                else:
+                    print "file 404"
+                    print(str(data))
+
+            if process_file:
+                cmd3 = 'ffmpeg -hide_banner -i ' + '"' + file_place + '"'
+                cmd3 += ' -c:v libx264 -x264opts keyint=500:no-scenecut -s 1280x720 -r 25 -b:v 3000000 -profile:v main -c:a aac'
+                cmd3 += ' -sws_flags bilinear -hls_time 10 -hls_segment_type mpegts -hls_allow_cache 0 -hls_list_size 0'
+                cmd3 += ' -live_start_index 0 -hls_flags +temp_file+program_date_time -hls_playlist_type event'
+                cmd3 += ' -hls_start_number_source generic -hls_base_url ' + request.host_url + 'api/video/' + str(record_id) + '/ -start_number 0 '
+
+                output3 = args.root_dir + record_id
+                output_file = os.path.join(output3, 'play.m3u8')
+
+                if os.path.exists(output3):
+                    shutil.rmtree(output3)
+
+                worker = Worker(cmd3, output_file)
+                worker.start()
+
+                while not os.path.exists(output_file):
+                    time.sleep(2)
+
+                local_data.records[record_id] = output_file
+                print "record %s is added successfully" % record_id
+                return jsonify(record_id=record_id)
+        else:
+            print "no file in json"
+
+    elif request.method == 'GET':
+        if path in local_data.records:
+            return jsonify(file=local_data.records[path])
+
+
 if __name__ == "__main__":
     print('eigakan')
 
-    # http-server
+    # mime support
+    mimetypes.init()
+    mimetypes.add_type('application/x-mpegurl', '.m3u8', strict=False)
+    mimetypes.add_type('video/mp2t ', '.ts', strict=False)
+    mimetypes.add_type('text/vtt', '.vtt', strict=False)
+
+    # arguments
     parser = argparse.ArgumentParser(description='HTTP Server')
     parser.add_argument('port', type=int, help='Listening port for HTTP Server')
     parser.add_argument('ip', help='HTTP Server IP')
+    parser.add_argument('root_dir', help='Directory to serve inside http server')
     args = parser.parse_args()
 
-    server = SimpleHttpServer(args.ip, args.port)
-    print 'HTTP Server Running...........'
+    # http-server
+    app.run(host=args.ip, port=str(args.port), threaded=True)
 
-    server.start()
-    server.waitForThread()
+# TODO support stoping transcode via GET/POST
+# TODO resolve: socket.py", line 307, in flush self._sock.sendall(view[write_offset:write_offset+buffer_size])
