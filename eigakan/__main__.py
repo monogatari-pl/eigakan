@@ -106,6 +106,9 @@ class FFMPegRunner(object):
         self.run_session(self.cmd, status_handler=self.status_handler)
         print('running')
 
+    def stop(self):
+        self._stop = True
+
     def shutdown(self):
         self._stop = True
 
@@ -120,7 +123,6 @@ class LocalData(object):
 
 local_data = LocalData
 app = Flask(__name__, static_url_path='')
-worker = None
 
 
 class Worker(threading.Thread):
@@ -156,6 +158,21 @@ def transcode(path):
         data = request.get_json(silent=True)
         record_id = path
         process_file = False
+
+        resolution = '1280x720'
+        audio_coded = 'aac'
+        video_bitrate = '3000000'
+        x264_profile = 'main'
+
+        if 'resolution' in data:
+            resolution = data['resolution']
+        if 'audio_coded' in data:
+            audio_coded = data['audio_coded']
+        if 'video_bitrate' in data:
+            video_bitrate = data['video_bitrate']
+        if 'x264_profile' in data:
+            x264_profile = data['x264_profile']
+
         if 'file' in data:
             file_place = data['file']
             if "http:" in file_place:
@@ -175,16 +192,20 @@ def transcode(path):
 
             if process_file:
                 cmd3 = 'ffmpeg -hide_banner -i ' + '"' + file_place + '"'
-                cmd3 += ' -c:v libx264 -x264opts keyint=500:no-scenecut -s 1280x720 -r 25 -b:v 3000000 -profile:v main -c:a aac'
+                cmd3 += ' -c:v libx264 -x264opts keyint=500:no-scenecut -s ' + resolution
+                cmd3 += ' -r 25 -b:v ' + video_bitrate + ' -profile:v ' + x264_profile + ' -c:a ' + audio_coded
                 cmd3 += ' -sws_flags bilinear -hls_time 10 -hls_segment_type mpegts -hls_allow_cache 0 -hls_list_size 0'
                 cmd3 += ' -live_start_index 0 -hls_flags +temp_file+program_date_time -hls_playlist_type event'
                 cmd3 += ' -hls_start_number_source generic -hls_base_url ' + request.host_url + 'api/video/' + str(record_id) + '/ -start_number 0 '
 
-                output3 = args.root_dir + record_id
+                output3 = args.root_dir + '/' + record_id
                 output_file = os.path.join(output3, 'play.m3u8')
 
                 if os.path.exists(output3):
-                    shutil.rmtree(output3)
+                    try:
+                        shutil.rmtree(output3)
+                    except:
+                        print('we didnt not clean {}, something use it while we tried'.format(output3))
 
                 worker = Worker(cmd3, output_file)
                 worker.start()
@@ -192,7 +213,7 @@ def transcode(path):
                 while not os.path.exists(output_file):
                     time.sleep(2)
 
-                local_data.records[record_id] = output_file
+                local_data.records[record_id] = worker
                 print "record %s is added successfully" % record_id
                 return jsonify(record_id=record_id)
         else:
@@ -201,6 +222,16 @@ def transcode(path):
     elif request.method == 'GET':
         if path in local_data.records:
             return jsonify(file=local_data.records[path])
+
+
+@app.route('/api/transcode/<path:path>/cancel', methods=['GET'])
+def cancel_transcode(path):
+    if path in local_data.records:
+        worker = local_data.records[path]
+        worker.stop()
+        # worker.waitForThread()
+        local_data.records.pop(path, None)
+        return jsonify(action='cancel')
 
 
 if __name__ == "__main__":
@@ -222,6 +253,5 @@ if __name__ == "__main__":
     # http-server
     app.run(host=args.ip, port=str(args.port), threaded=True)
 
-# TODO support stoping transcode via GET/POST
 # TODO resolve: socket.py", line 307, in flush self._sock.sendall(view[write_offset:write_offset+buffer_size])
 # TODO add support to hardsubing with parameter of which subs to pick based on metadata from external source (nakamori -> shoko)
