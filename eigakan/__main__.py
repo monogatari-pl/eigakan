@@ -20,6 +20,8 @@ import shutil
 import urllib2
 
 
+__version__ = 0.5
+
 class FFMPegRunner(object):
 
     re_duration = re.compile('Duration: (\d{2}):(\d{2}):(\d{2}).(\d{2})[^\d]*', re.U)
@@ -147,6 +149,11 @@ class Worker(threading.Thread):
         self.runner.status()
 
 
+@app.route('/api/version')
+def get_version():
+    return jsonify(eigakan=__version__)
+
+
 @app.route('/api/video/<path:path>')
 def do_get(path):
     return send_from_directory(args.root_dir, path)
@@ -163,6 +170,8 @@ def transcode(path):
         audio_coded = 'aac'
         video_bitrate = '3000000'
         x264_profile = 'main'
+        audio_stream = '-1'
+        subtitles_stream = '-1'
 
         if 'resolution' in data:
             resolution = data['resolution']
@@ -172,6 +181,10 @@ def transcode(path):
             video_bitrate = data['video_bitrate']
         if 'x264_profile' in data:
             x264_profile = data['x264_profile']
+        if 'audio_stream' in data:
+            audio_stream = data['audio_stream']
+        if 'subtitles_stream' in data:
+            subtitles_stream = data['subtitles_stream']
 
         if 'file' in data:
             file_place = data['file']
@@ -192,6 +205,12 @@ def transcode(path):
 
             if process_file:
                 cmd3 = 'ffmpeg -hide_banner -i ' + '"' + file_place + '"'
+                # this will only work with bitmap subttiles, other should use -subtitles
+                # but subtitles don't like http:// url for subtitles embeded inside file
+                if subtitles_stream != '-1':
+                    cmd3 += ' -filter_complex "[0:v][0:s:' + subtitles_stream + ']overlay[v]" -map "[v]"'
+                if audio_stream != '-1':
+                    cmd3 += ' -map 0:a:' + audio_stream
                 cmd3 += ' -c:v libx264 -x264opts keyint=500:no-scenecut -s ' + resolution
                 cmd3 += ' -r 25 -b:v ' + video_bitrate + ' -profile:v ' + x264_profile + ' -c:a ' + audio_coded
                 cmd3 += ' -sws_flags bilinear -hls_time 10 -hls_segment_type mpegts -hls_allow_cache 0 -hls_list_size 0'
