@@ -5,7 +5,7 @@ from setuptools import setup
 
 setup(
     name='eigakan',
-    version='0.5',
+    version='0.7',
     packages=['eigakan'],
     url='',
     license='',
@@ -15,6 +15,9 @@ setup(
     install_requires=[
         'winpexpect',
         'progressbar2',
-        'flask'
+        'flask',
+        'urllib3',
+        'shutil',
+        'subprocess'
     ]
 )

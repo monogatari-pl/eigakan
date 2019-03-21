@@ -17,13 +17,13 @@ import argparse
 
 import shutil
 
-import urllib2
+import urllib3
 
 
-__version__ = 0.5
+__version__ = 0.7
+
 
 class FFMPegRunner(object):
-
     re_duration = re.compile('Duration: (\d{2}):(\d{2}):(\d{2}).(\d{2})[^\d]*', re.U)
     re_position = re.compile('time=(\d{2}):(\d{2}):(\d{2})\.(\d{2})\d*', re.U | re.I)
     pipe = None
@@ -189,22 +189,22 @@ def transcode(path):
         if 'file' in data:
             file_place = data['file']
             if "http:" in file_place:
+                http = urllib3.PoolManager()
                 try:
-                    urllib2.urlopen(file_place)
+                    http.request('HEAD', file_place)
                     process_file = True
-                except urllib2.HTTPError, e:
-                    print(e.code)
-                except urllib2.URLError, e:
-                    print(e.args)
+                except urllib3.exceptions.HTTPError as e:
+                    print(e)
             else:
                 if os.path.exists(file_place):
                     process_file = True
                 else:
-                    print "file 404"
+                    print("file 404")
                     print(str(data))
 
             if process_file:
-                cmd3 = 'ffmpeg -hide_banner -i ' + '"' + file_place + '"'
+                cmd3 = args.ffmpeg_path
+                cmd3 += ' -hide_banner -i ' + '"' + file_place + '"'
                 # this will only work with bitmap subttiles, other should use -subtitles
                 # but subtitles don't like http:// url for subtitles embeded inside file
                 if subtitles_stream != '-1':
@@ -225,6 +225,8 @@ def transcode(path):
                         shutil.rmtree(output3)
                     except:
                         print('we didnt not clean {}, something use it while we tried'.format(output3))
+                else:
+                    os.mkdir(output3)
 
                 worker = Worker(cmd3, output_file)
                 worker.start()
@@ -233,10 +235,10 @@ def transcode(path):
                     time.sleep(2)
 
                 local_data.records[record_id] = worker
-                print "record %s is added successfully" % record_id
+                print("record %s is added successfully" % record_id)
                 return jsonify(record_id=record_id)
         else:
-            print "no file in json"
+            print("no file in json")
 
     elif request.method == 'GET':
         if path in local_data.records:
@@ -267,10 +269,14 @@ if __name__ == "__main__":
     parser.add_argument('port', type=int, help='Listening port for HTTP Server')
     parser.add_argument('ip', help='HTTP Server IP')
     parser.add_argument('root_dir', help='Directory to serve inside http server')
+    parser.add_argument('ffmpeg_path', help='Path to ffmpeg')
     args = parser.parse_args()
 
-    # http-server
-    app.run(host=args.ip, port=str(args.port), threaded=True)
+    if shutil.which('ffmpeg') or os.path.exists(args.ffmpeg_path)is not None:
+        # http-server
+        app.run(host=args.ip, port=str(args.port), threaded=True)
+    else:
+        print("ffmpeg cannot be found")
 
 # TODO resolve: socket.py", line 307, in flush self._sock.sendall(view[write_offset:write_offset+buffer_size])
 # TODO add support to hardsubing with parameter of which subs to pick based on metadata from external source (nakamori -> shoko)
