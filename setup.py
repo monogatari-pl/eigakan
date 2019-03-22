@@ -17,7 +17,5 @@ setup(
         'progressbar2',
         'flask',
         'urllib3',
-        'shutil',
-        'subprocess'
     ]
 )

@@ -44,8 +44,9 @@ class FFMPegRunner(object):
                                      stdout=subprocess.PIPE,
                                      stderr=subprocess.STDOUT,
                                      universal_newlines=True,
+                                     encoding="utf-8",
+                                     errors='ignore',
                                      stdin=subprocess.PIPE)
-
         duration = None
         position = None
         percents = 0
@@ -56,6 +57,7 @@ class FFMPegRunner(object):
                     self.pipe.communicate(input=b'q')
                     time.sleep(2)
                     break
+
             line = self.pipe.stdout.readline().strip()
 
             if line == '' and self.pipe.poll() is not None:
@@ -213,9 +215,25 @@ def transcode(path):
                     cmd3 += ' -map 0:a:' + audio_stream
                 cmd3 += ' -c:v libx264 -x264opts keyint=500:no-scenecut -s ' + resolution
                 cmd3 += ' -r 25 -b:v ' + video_bitrate + ' -profile:v ' + x264_profile + ' -c:a ' + audio_coded
-                cmd3 += ' -sws_flags bilinear -hls_time 10 -hls_segment_type mpegts -hls_allow_cache 0 -hls_list_size 0'
-                cmd3 += ' -live_start_index 0 -hls_flags +temp_file+program_date_time -hls_playlist_type event'
-                cmd3 += ' -hls_start_number_source generic -hls_base_url ' + request.host_url + 'api/video/' + str(record_id) + '/ -start_number 0 '
+                cmd3 += ' -sws_flags bilinear'
+                # HLS settings
+                cmd3 += ' -hls_time 10'
+                cmd3 += ' -hls_segment_type mpegts'
+                # cmd3 += ' -hls_segment_type fmp4'  # hls v7 add info about version from 3 to 7 # wont play
+                cmd3 += ' -hls_allow_cache 0'
+                cmd3 += ' -hls_list_size 0'
+                # cmd3 += ' -live_start_index '  # demuxer option
+                cmd3 += ' -hls_flags +temp_file'
+                # cmd3 += '+program_date_time'
+                cmd3 += '+append_list'
+                cmd3 += '+independent_segments'  # boost version to 6 !
+                # cmd3 += '+round_durations'
+                # cmd3 += '+omit_endlist'
+                cmd3 += ' -hls_playlist_type event'
+                # cmd3 += ' -hls_playlist_type vod'
+                cmd3 += ' -hls_start_number_source generic'
+                cmd3 += ' -start_number 0'
+                cmd3 += ' -hls_base_url ' + request.host_url + 'api/video/' + str(record_id) + '/ '
 
                 output3 = args.root_dir + '/' + record_id
                 output_file = os.path.join(output3, 'play.m3u8')
@@ -236,6 +254,17 @@ def transcode(path):
 
                 local_data.records[record_id] = worker
                 print("record %s is added successfully" % record_id)
+
+                while not os.path.exists(output_file):
+                    time.sleep(1)
+
+                s = open(output_file).read()
+                s = s.replace('EXT-X-MEDIA-SEQUENCE:0', 'EXT-X-MEDIA-SEQUENCE:0\n#EXT-X-START:TIME-OFFSET=0')
+                s = s.replace('EXT-X-VERSION:3', 'EXT-X-VERSION:6')
+                f = open(output_file, 'w')
+                f.write(s)
+                f.close()
+
                 return jsonify(record_id=record_id)
         else:
             print("no file in json")
