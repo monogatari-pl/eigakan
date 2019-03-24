@@ -5,7 +5,7 @@ from setuptools import setup
 
 setup(
     name='eigakan',
-    version='0.7',
+    version='0.8',
     packages=['eigakan'],
     url='',
     license='',

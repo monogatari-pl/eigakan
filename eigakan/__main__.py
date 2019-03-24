@@ -20,12 +20,71 @@ import shutil
 import urllib3
 
 
-__version__ = 0.7
+__version__ = 0.8
+
+
+class GenerateM3U8(object):
+    def __init__(self):
+        self._stop = False
+
+    def run_session(self, m3u8_path):
+        # new m3u8
+        m3u8 = os.path.join(m3u8_path, 'play_me.m3u8')
+        index = 0
+        make_file = True
+        while True:
+            if self._stop:
+                break
+
+            # new m3u8
+            if make_file:
+                f = open(m3u8, 'a')
+                lines = [
+                        '#EXTM3U\r',
+                        '#EXT-X-VERSION:7\r',
+                        '#EXT-X-ALLOW-CACHE:NO\r',
+                        '#EXT-X-TARGETDURATION:20\r',
+                        #'#EXT-X-MEDIA-SEQUENCE:0\r',
+                        #'#EXT-X-PLAYLIST-TYPE:EVENT\r',
+                        '#EXT-X-INDEPENDENT-SEGMENTS\r',
+                        '#EXT-X-START:TIME-OFFSET=20.0,PRECISE=YES\r'
+                ]
+                f.writelines(lines)
+                f.close()
+                make_file = False
+
+            if os.path.exists(os.path.join(m3u8_path, 'play' + str(index) + '.ts')):
+                f = open(m3u8, 'a')
+                lines = [
+                        '#EXTINF:20.000000,\r',
+                        'http://127.0.0.1:8000/api/video/15137/play' + str(index) + '.ts\r'
+                        ]
+                f.writelines(lines)
+                f.close()
+                index += 1
+            else:
+                time.sleep(1)
+
+    def run(self, m3u8_path):
+        self.run_session(m3u8_path)
+        print('running m38u')
+
+    def stop(self):
+        self._stop = True
+
+    def shutdown(self):
+        self._stop = True
+
+    def status(self):
+        if self._stop:
+            print('stopped')
+        else:
+            print('running strong')
 
 
 class FFMPegRunner(object):
-    re_duration = re.compile('Duration: (\d{2}):(\d{2}):(\d{2}).(\d{2})[^\d]*', re.U)
-    re_position = re.compile('time=(\d{2}):(\d{2}):(\d{2})\.(\d{2})\d*', re.U | re.I)
+    re_duration = re.compile('Duration: (\\d{2}):(\\d{2}):(\\d{2}).(\\d{2})[^\\d]*', re.U)
+    re_position = re.compile('time=(\\d{2}):(\\d{2}):(\\d{2}).(\\d{2})\\d*', re.U | re.I)
     pipe = None
 
     def __init__(self, command, output):
@@ -54,7 +113,7 @@ class FFMPegRunner(object):
         while True:
             if self._stop:
                 if self.pipe is not None:
-                    self.pipe.communicate(input=b'q')
+                    self.pipe.communicate(input='q')
                     time.sleep(2)
                     break
 
@@ -127,6 +186,28 @@ class LocalData(object):
 
 local_data = LocalData
 app = Flask(__name__, static_url_path='')
+
+
+class WorkerM3U8(threading.Thread):
+    def __init__(self, _path):  # , queue):
+        threading.Thread.__init__(self)
+        self._path = _path
+        self.server_thread = None
+        self.runner = GenerateM3U8()
+
+    def run(self):
+        self.server_thread = threading.Thread(target=self.runner.run(self._path))
+        self.server_thread.daemon = False
+        self.server_thread.start()
+
+    def waitForThread(self):
+        self.server_thread.join()
+
+    def stop(self):
+        self.runner.shutdown()
+
+    def status(self):
+        self.runner.status()
 
 
 class Worker(threading.Thread):
@@ -249,6 +330,9 @@ def transcode(path):
                 worker = Worker(cmd3, output_file)
                 worker.start()
 
+                worker2 = WorkerM3U8(output3)
+                worker2.start()
+
                 while not os.path.exists(output_file):
                     time.sleep(2)
 
@@ -257,13 +341,6 @@ def transcode(path):
 
                 while not os.path.exists(output_file):
                     time.sleep(1)
-
-                s = open(output_file).read()
-                s = s.replace('EXT-X-MEDIA-SEQUENCE:0', 'EXT-X-MEDIA-SEQUENCE:0\n#EXT-X-START:TIME-OFFSET=0')
-                s = s.replace('EXT-X-VERSION:3', 'EXT-X-VERSION:6')
-                f = open(output_file, 'w')
-                f.write(s)
-                f.close()
 
                 return jsonify(record_id=record_id)
         else:
